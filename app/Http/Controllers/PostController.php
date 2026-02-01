@@ -3,127 +3,81 @@
 namespace App\Http\Controllers;
 
 use App\Models\Post;
-use Illuminate\Http\RedirectResponse;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
-use Inertia\Inertia;
-use Inertia\Response;
 
 class PostController extends Controller
 {
-    /**
-     * Tampilan untuk publik (Hanya yang sudah publish).
-     */
-    public function index(): Response
-    {
-        $posts = Post::query()
-            ->select('id', 'user_id', 'title', 'published_at')
-            ->with('user:id,name')
-            ->where('is_draft', false)
-            ->whereNotNull('published_at')
-            ->where('published_at', '<=', now())
-            ->latest('published_at')
-            ->paginate(20)
-            ->withQueryString();
+    use AuthorizesRequests;
 
-        return Inertia::render('posts/index', ['posts' => $posts]);
-    }
-
-    /**
-     * Postingan milik saya sendiri (Termasuk draft/scheduled).
-     */
-    public function myPosts(): Response
+    public function index(): JsonResponse
     {
-        $posts = Post::query()
-            ->select('id', 'user_id', 'is_draft', 'title', 'published_at')
-            ->with('user:id,name')
-            ->where('user_id', auth()->id())
+        $posts = Post::with('user')
+            ->active()
             ->latest()
-            ->paginate(20)
-            ->withQueryString();
+            ->paginate(20);
 
-        return Inertia::render('posts/user/index', ['posts' => $posts]);
+        return response()->json($posts);
     }
 
-    public function create(): Response
+    public function create(): string
     {
-        return Inertia::render('posts/create');
+        return 'posts.create';
     }
 
-    public function store(Request $request): RedirectResponse
-    {
-        $validated = $this->validatePost($request);
-
-        // Menggunakan relationship create untuk otomatis mengisi user_id
-        $request->user()->posts()->create($validated);
-
-        return redirect()->route('my-posts')
-            ->with('success', 'Post created successfully.');
-    }
-
-    public function show(Post $post): Response
-    {
-        // Kebijakan: Jika draft ATAU belum waktunya publish,
-        // hanya pemilik yang bisa melihat.
-        $isNotPublished = $post->is_draft || ($post->published_at && $post->published_at->isFuture());
-
-        if ($isNotPublished && auth()->id() !== $post->user_id) {
-            abort(404);
-        }
-
-        return Inertia::render('posts/show', [
-            'post' => $post->load('user:id,name'),
-        ]);
-    }
-
-    public function edit(Post $post): Response
-    {
-        Gate::authorize('update', $post);
-
-        return Inertia::render('posts/user/edit', ['post' => $post]);
-    }
-
-    public function update(Request $request, Post $post): RedirectResponse
-    {
-        Gate::authorize('update', $post);
-
-        $validated = $this->validatePost($request);
-        $post->update($validated);
-
-        return redirect()->route('my-posts')
-            ->with('success', 'Post updated successfully.');
-    }
-
-    public function destroy(Post $post): RedirectResponse
-    {
-        Gate::authorize('delete', $post); // Gunakan 'delete' bukan 'update'
-
-        $post->delete();
-
-        return redirect()->route('my-posts')
-            ->with('success', 'Post deleted successfully');
-    }
-
-    /**
-     * Helper untuk validasi dan logika bisnis field.
-     */
-    protected function validatePost(Request $request): array
+    public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'title' => 'required|string|max:255',
             'content' => 'required|string',
-            'is_draft' => 'required|boolean',
-            'published_at' => 'nullable|date|required_if:is_draft,false',
+            'published_at' => 'nullable|date',
         ]);
 
-        // Jika draft, pastikan published_at null.
-        // Jika publish tapi tanggal kosong, isi dengan now().
-        if ($validated['is_draft']) {
-            $validated['published_at'] = null;
-        } elseif (empty($validated['published_at'])) {
-            $validated['published_at'] = now();
+        $post = $request->user()->posts()->create($validated);
+
+        return response()->json($post, 201);
+    }
+
+    public function show(Post $post): JsonResponse
+    {
+        // Pastikan post sudah publish
+        if (! $post->published_at || $post->published_at->isFuture()) {
+            abort(404);
         }
 
-        return $validated;
+        return response()->json($post->load('user'));
+    }
+
+    public function edit(Post $post): string
+    {
+        Gate::authorize('update', $post);
+
+        return 'posts.edit';
+    }
+
+    public function update(Request $request, Post $post): JsonResponse
+    {
+        Gate::authorize('update', $post);
+
+        $validated = $request->validate([
+            'title' => 'sometimes|required|string|max:255',
+            'content' => 'sometimes|required|string',
+            'published_at' => 'nullable|date',
+        ]);
+
+        $post->update($validated);
+
+        return response()->json($post);
+    }
+
+    public function destroy(Post $post): JsonResponse
+    {
+        Gate::authorize('delete', $post);
+
+        $post->delete();
+
+        return response()->json(['message' => 'Post deleted successfully']);
     }
 }

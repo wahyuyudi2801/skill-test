@@ -2,17 +2,26 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Post extends Model
 {
-    /** @use HasFactory<\Database\Factories\UserFactory> */
-    use HasFactory;
+    protected $fillable = ['title', 'content', 'published_at', 'user_id'];
 
-    protected $fillable = ['id', 'user_id', 'title', 'content', 'is_draft', 'published_at'];
+    protected $casts = [
+        'published_at' => 'datetime',
+    ];
 
-    public function user()
+    // Local Scope untuk Post yang sudah aktif (bukan draft/scheduled)
+    public function scopeActive(Builder $query): void
+    {
+        $query->whereNotNull('published_at')
+            ->where('published_at', '<=', now());
+    }
+
+    public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }

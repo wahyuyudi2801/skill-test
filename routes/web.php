@@ -9,12 +9,10 @@ use Illuminate\Support\Facades\Route;
 Route::get('/', [WelcomeController::class, 'index'])->name('home');
 Route::get('/welcome/{post}', [WelcomeController::class, 'show'])->name('home.show');
 
-Route::resource('posts', PostController::class)->only(['index', 'show']);
-
 // --- Authenticated Routes ---
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('dashboard', [DashboardController::class, 'index'])->name('dashboard');
-    Route::resource('posts', PostController::class)->except(['index', 'show']);
+    Route::resource('posts', PostController::class);
     Route::get('my-posts', [PostController::class, 'myPosts'])->name('my-posts');
 });
 
