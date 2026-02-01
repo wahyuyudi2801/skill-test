@@ -3,35 +3,41 @@
 namespace App\Http\Controllers;
 
 use App\Models\Post;
-use Illuminate\Http\Request;
 use Inertia\Inertia;
+use Inertia\Response;
 
 class WelcomeController extends Controller
 {
-    function index()
+    /**
+     * Menampilkan daftar postingan yang sudah dipublikasikan ke publik.
+     */
+    public function index(): Response
     {
-        $posts = Post::select('id', 'user_id', 'title', 'content', 'published_at')
-            ->with(['user' => fn($query) => $query->select('id', 'name')])
-            ->where('is_draft', false)
-            ->where(function ($q) {
-                $q->whereNull('published_at')
-                    ->orWhere('published_at', '<=', now());
-            })
-            ->orderBy('published_at', 'desc')
-            ->paginate(20)
+        $posts = Post::query()
+            ->select(['id', 'user_id', 'title', 'content', 'published_at'])
+            ->with('user:id,name')
+            ->published()
+            ->latest('published_at')
+            ->paginate(12)
             ->withQueryString();
 
-        return Inertia::render('welcome', ['posts' => $posts]);
+        return Inertia::render('welcome', [
+            'posts' => $posts,
+        ]);
     }
 
-    function show(Post $post)
+    /**
+     * Menampilkan detail postingan publik.
+     */
+    public function show(Post $post): Response
     {
-        if ($post->is_draft) {
+        // Pastikan post tidak dalam status draft dan sudah melewati waktu publish
+        if ($post->is_draft || ($post->published_at && $post->published_at->isFuture())) {
             abort(404);
         }
 
         return Inertia::render('welcome-show', [
-            'post' => $post->load('user:id,name')
+            'post' => $post->load('user:id,name'),
         ]);
     }
 }

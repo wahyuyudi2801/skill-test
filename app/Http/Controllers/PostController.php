@@ -3,130 +3,127 @@
 namespace App\Http\Controllers;
 
 use App\Models\Post;
-use Exception;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Inertia\Inertia;
+use Inertia\Response;
 
 class PostController extends Controller
 {
     /**
-     * Display a listing of the resource.
+     * Tampilan untuk publik (Hanya yang sudah publish).
      */
-    public function index()
+    public function index(): Response
     {
-        $posts = Post::select('id', 'user_id', 'title', 'published_at')
-            ->with(['user' => fn($query) => $query->select('id', 'name')])
+        $posts = Post::query()
+            ->select('id', 'user_id', 'title', 'published_at')
+            ->with('user:id,name')
             ->where('is_draft', false)
-            ->where(function ($q) {
-                $q->whereNull('published_at')
-                    ->orWhere('published_at', '<=', now());
-            })
-            ->orderBy('published_at', 'desc')
+            ->whereNotNull('published_at')
+            ->where('published_at', '<=', now())
+            ->latest('published_at')
             ->paginate(20)
             ->withQueryString();
 
         return Inertia::render('posts/index', ['posts' => $posts]);
     }
 
-    public function myPosts()
+    /**
+     * Postingan milik saya sendiri (Termasuk draft/scheduled).
+     */
+    public function myPosts(): Response
     {
-        $posts = Post::select('id', 'user_id', 'is_draft', 'title', 'published_at')
-            ->with(['user' => fn($query) => $query->select('id', 'name')])
+        $posts = Post::query()
+            ->select('id', 'user_id', 'is_draft', 'title', 'published_at')
+            ->with('user:id,name')
             ->where('user_id', auth()->id())
-            ->orderBy('published_at', 'desc')
+            ->latest()
             ->paginate(20)
             ->withQueryString();
 
         return Inertia::render('posts/user/index', ['posts' => $posts]);
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
+    public function create(): Response
     {
         return Inertia::render('posts/create');
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
-    public function store(Request $request)
+    public function store(Request $request): RedirectResponse
     {
-        $validated = $request->validate([
-            'title' => 'required|string|max:255',
-            'content' => 'required|string',
-            'is_draft' => 'boolean',
-            'published_at' => 'nullable|date',
-        ]);
+        $validated = $this->validatePost($request);
 
-        $validated['user_id'] = auth()->id();
+        // Menggunakan relationship create untuk otomatis mengisi user_id
+        $request->user()->posts()->create($validated);
 
-        if ($validated['is_draft']) {
-            $validated['published_at'] = null;
-        }
-
-        Post::create($validated);
-
-        return redirect()->route('posts.index')
+        return redirect()->route('my-posts')
             ->with('success', 'Post created successfully.');
     }
 
-
-    /**
-     * Display the specified resource.
-     */
-    public function show(Post $post)
+    public function show(Post $post): Response
     {
-        if ($post->is_draft && $post->published_at > now()) {
+        // Kebijakan: Jika draft ATAU belum waktunya publish,
+        // hanya pemilik yang bisa melihat.
+        $isNotPublished = $post->is_draft || ($post->published_at && $post->published_at->isFuture());
+
+        if ($isNotPublished && auth()->id() !== $post->user_id) {
             abort(404);
         }
 
-        return Inertia::render('posts/show', ['post' => $post->load('user:id,name')]);
+        return Inertia::render('posts/show', [
+            'post' => $post->load('user:id,name'),
+        ]);
     }
 
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(Post $post)
+    public function edit(Post $post): Response
     {
         Gate::authorize('update', $post);
 
         return Inertia::render('posts/user/edit', ['post' => $post]);
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, Post $post)
+    public function update(Request $request, Post $post): RedirectResponse
     {
         Gate::authorize('update', $post);
 
-        $validated = $request->validate([
-            'title' => 'required|string|max:255',
-            'content' => 'required|string',
-            'is_draft' => 'boolean',
-            'published_at' => 'nullable|date',
-        ]);
-
-        if ($validated['is_draft']) {
-            $validated['published_at'] = null;
-        }
-
+        $validated = $this->validatePost($request);
         $post->update($validated);
 
         return redirect()->route('my-posts')
             ->with('success', 'Post updated successfully.');
     }
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(Post $post)
+    public function destroy(Post $post): RedirectResponse
     {
-        Gate::authorize('update', $post);
+        Gate::authorize('delete', $post); // Gunakan 'delete' bukan 'update'
+
         $post->delete();
-        return redirect()->route('my-posts')->with('success', 'Post deleted successfully');
+
+        return redirect()->route('my-posts')
+            ->with('success', 'Post deleted successfully');
+    }
+
+    /**
+     * Helper untuk validasi dan logika bisnis field.
+     */
+    protected function validatePost(Request $request): array
+    {
+        $validated = $request->validate([
+            'title' => 'required|string|max:255',
+            'content' => 'required|string',
+            'is_draft' => 'required|boolean',
+            'published_at' => 'nullable|date|required_if:is_draft,false',
+        ]);
+
+        // Jika draft, pastikan published_at null.
+        // Jika publish tapi tanggal kosong, isi dengan now().
+        if ($validated['is_draft']) {
+            $validated['published_at'] = null;
+        } elseif (empty($validated['published_at'])) {
+            $validated['published_at'] = now();
+        }
+
+        return $validated;
     }
 }
